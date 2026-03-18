@@ -49,6 +49,8 @@ export interface WebhookDeliverMsg {
   senderId: string;
   senderName: string;
   chatId: string;
+  /** The actual MAX dialog/chat ID — used for typing indicator */
+  dialogChatId: string;
   chatType: "direct" | "chat" | "channel";
   messageId: string;
   accountId: string;
@@ -134,10 +136,11 @@ export async function handleUpdate(
   if (sender.is_bot) return;
 
   const chatType = resolveChatType(msg);
+  const dialogChatId = String(msg.recipient?.chat_id ?? sender.user_id);
   const chatId =
     chatType === "direct"
       ? String(sender.user_id)
-      : String(msg.recipient.chat_id ?? sender.user_id);
+      : dialogChatId;
 
   const senderId = String(sender.user_id);
   const senderName = sender.name || sender.username || senderId;
@@ -160,6 +163,7 @@ export async function handleUpdate(
       senderId,
       senderName,
       chatId,
+      dialogChatId,
       chatType,
       messageId,
       accountId: account.accountId,

@@ -102,6 +102,22 @@ export async function editMessage(token: string, messageId: string, text: string
 }
 
 /**
+ * Send typing indicator to a chat.
+ * action: "typing_on" | "typing_off" | "sending_photo" | "sending_video" | "sending_audio"
+ */
+export async function sendTypingAction(
+  token: string,
+  chatId: number,
+  action: "typing_on" | "typing_off" = "typing_on",
+): Promise<void> {
+  try {
+    await maxRequest(token, "POST", `/chats/${chatId}/actions`, {}, { action });
+  } catch {
+    // Typing is best-effort, never throw
+  }
+}
+
+/**
  * Long-poll for new updates.
  * Returns updates + next marker.
  */

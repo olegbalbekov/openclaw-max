@@ -15,7 +15,7 @@ import {
   registerPluginHttpRoute,
 } from "openclaw/plugin-sdk/synology-chat";
 import { listAccountIds, resolveAccount } from "./accounts.js";
-import { sendDm, sendToChat, editMessage, getUpdates, subscribeWebhook, deleteWebhook, getBotInfo } from "./client.js";
+import { sendDm, sendToChat, editMessage, sendTypingAction, getUpdates, subscribeWebhook, deleteWebhook, getBotInfo } from "./client.js";
 import { getMaxRuntime } from "./runtime.js";
 import { createWebhookHandler, handleUpdate } from "./webhook-handler.js";
 import type { ResolvedMaxAccount } from "./types.js";
@@ -66,6 +66,7 @@ async function sendReply(
 function createStreamingDeliver(
   account: ResolvedMaxAccount,
   chatId: string,
+  dialogChatId: string,
   chatType: string,
   log?: any,
 ): {
@@ -94,12 +95,27 @@ function createStreamingDeliver(
     }
   }
 
+  // Typing indicator — dialogChatId is the actual MAX chat/dialog id (not user_id)
+  const numericDialogChatId = parseInt(dialogChatId, 10);
+  let typingInterval: ReturnType<typeof setInterval> | null = null;
+  if (!isNaN(numericDialogChatId)) {
+    sendTypingAction(account.token, numericDialogChatId).catch(() => {});
+    typingInterval = setInterval(() => {
+      sendTypingAction(account.token, numericDialogChatId).catch(() => {});
+    }, 5000);
+  }
+
+  function stopTyping() {
+    if (typingInterval) { clearInterval(typingInterval); typingInterval = null; }
+  }
+
   // Promise to prevent race condition on first message creation
   let creationPromise: Promise<void> | null = null;
 
   // Called for each streaming partial (text is CUMULATIVE — full text so far)
   async function onPartialToken(text: string) {
     if (!text) return;
+    stopTyping(); // Stop typing indicator once streaming starts
     accumulated = text; // SET not += (onPartialReply is cumulative)
 
     if (!messageId) {
@@ -120,6 +136,7 @@ function createStreamingDeliver(
 
   // Called once at end with final authoritative text
   async function deliver(payload: { text?: string; body?: string }) {
+    stopTyping(); // Ensure typing stops even if no partial tokens came
     if (pendingEdit) { clearTimeout(pendingEdit); pendingEdit = null; }
     const finalText = payload?.text ?? payload?.body ?? accumulated;
     if (!finalText) return;
@@ -145,6 +162,7 @@ async function deliverMessage(
     senderId,
     senderName,
     chatId,
+    dialogChatId,
     chatType,
     messageId,
     accountId,
@@ -153,6 +171,7 @@ async function deliverMessage(
     senderId: string;
     senderName: string;
     chatId: string;
+    dialogChatId: string;
     chatType: string;
     messageId: string;
     accountId: string;
@@ -184,7 +203,7 @@ async function deliverMessage(
     CommandAuthorized: true,
   });
 
-  const { onPartialToken, deliver } = createStreamingDeliver(account, chatId, chatType, log);
+  const { onPartialToken, deliver } = createStreamingDeliver(account, chatId, dialogChatId, chatType, log);
 
   await rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: msgCtx,
