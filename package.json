@@ -1,0 +1,72 @@
+{
+  "name": "@openclaw/max",
+  "version": "0.1.0",
+  "description": "MAX messenger (max.ru) channel plugin for OpenClaw",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src index.ts"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.0"
+  },
+  "devDependencies": {
+    "openclaw": "*",
+    "typescript": "^5.8.0",
+    "zod": "^4.3.6"
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "max",
+    "max.ru",
+    "messenger",
+    "chatbot",
+    "channel"
+  ],
+  "author": "Oleg Balbekov <oleg@evrone.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/olegbalbekov/openclaw-max.git"
+  },
+  "homepage": "https://github.com/olegbalbekov/openclaw-max",
+  "bugs": {
+    "url": "https://github.com/olegbalbekov/openclaw-max/issues"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "max",
+      "label": "MAX",
+      "selectionLabel": "MAX (Bot API)",
+      "docsPath": "/channels/max",
+      "docsLabel": "max",
+      "blurb": "Connect OpenClaw to MAX messenger via Bot API. Supports DMs and group chats.",
+      "order": 80
+    },
+    "install": {
+      "npmSpec": "@openclaw/max",
+      "localPath": "extensions/max",
+      "defaultChoice": "npm"
+    }
+  }
+}
