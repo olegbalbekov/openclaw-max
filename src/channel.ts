@@ -78,6 +78,20 @@ function createStreamingDeliver(
   let lastEditAt = 0;
   let pendingEdit: ReturnType<typeof setTimeout> | null = null;
 
+  // Typing indicator — declared early so throttledEdit can reference it
+  const numericDialogChatId = parseInt(dialogChatId, 10);
+  let typingInterval: ReturnType<typeof setInterval> | null = null;
+  if (!isNaN(numericDialogChatId)) {
+    sendTypingAction(account.token, numericDialogChatId).catch(() => {});
+    typingInterval = setInterval(() => {
+      sendTypingAction(account.token, numericDialogChatId).catch(() => {});
+    }, 4000);
+  }
+
+  function stopTyping() {
+    if (typingInterval) { clearInterval(typingInterval); typingInterval = null; }
+  }
+
   async function throttledEdit(text: string) {
     if (!messageId) return;
     const elapsed = Date.now() - lastEditAt;
@@ -85,37 +99,30 @@ function createStreamingDeliver(
     if (elapsed >= STREAM_EDIT_INTERVAL_MS) {
       await editMessage(account.token, messageId, text);
       lastEditAt = Date.now();
+      // MAX clears typing on message edit — renew immediately after
+      if (typingInterval !== null) {
+        sendTypingAction(account.token, numericDialogChatId).catch(() => {});
+      }
     } else {
       pendingEdit = setTimeout(async () => {
         if (messageId) {
           await editMessage(account.token, messageId, text).catch(() => {});
           lastEditAt = Date.now();
+          if (typingInterval !== null) {
+            sendTypingAction(account.token, numericDialogChatId).catch(() => {});
+          }
         }
       }, STREAM_EDIT_INTERVAL_MS - elapsed) as unknown as ReturnType<typeof setTimeout>;
     }
   }
 
-  // Typing indicator — dialogChatId is the actual MAX chat/dialog id (not user_id)
-  const numericDialogChatId = parseInt(dialogChatId, 10);
-  let typingInterval: ReturnType<typeof setInterval> | null = null;
-  if (!isNaN(numericDialogChatId)) {
-    sendTypingAction(account.token, numericDialogChatId).catch(() => {});
-    typingInterval = setInterval(() => {
-      sendTypingAction(account.token, numericDialogChatId).catch(() => {});
-    }, 5000);
-  }
-
-  function stopTyping() {
-    if (typingInterval) { clearInterval(typingInterval); typingInterval = null; }
-  }
-
-  // Promise to prevent race condition on first message creation
+    // Promise to prevent race condition on first message creation
   let creationPromise: Promise<void> | null = null;
 
   // Called for each streaming partial (text is CUMULATIVE — full text so far)
   async function onPartialToken(text: string) {
     if (!text) return;
-    stopTyping(); // Stop typing indicator once streaming starts
+    // Keep typing indicator alive during streaming — stop only in deliver()
     accumulated = text; // SET not += (onPartialReply is cumulative)
 
     if (!messageId) {
