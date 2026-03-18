@@ -115,6 +115,15 @@ Send any message to your bot, then check the OpenClaw logs — the sender's `use
 
 PRs welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
+## Sponsors
+
+Supported by [Evrone](https://evrone.com/?utm_source=openclaw-max) — a software development company that builds products and helps companies improve their development processes.
+
+<a href="https://evrone.com/?utm_source=openclaw-max">
+  <img src="https://user-images.githubusercontent.com/417688/34437029-dbfe4ee6-ecab-11e7-9d80-2b274b4149b3.png"
+       alt="Sponsored by Evrone" width="231" />
+</a>
+
 ## License
 
 MIT © [Oleg Balbekov](https://github.com/olegbalbekov)
