@@ -28,8 +28,7 @@
   },
   "devDependencies": {
     "openclaw": "*",
-    "typescript": "^5.8.0",
-    "zod": "^4.3.6"
+    "typescript": "^5.8.0"
   },
   "keywords": [
     "openclaw",
@@ -68,5 +67,8 @@
       "localPath": "extensions/max",
       "defaultChoice": "npm"
     }
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
   }
 }

@@ -9,11 +9,12 @@
  */
 
 import {
-  emptyPluginConfigSchema,
+  buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   setAccountEnabledInConfigSection,
   registerPluginHttpRoute,
 } from "openclaw/plugin-sdk/synology-chat";
+import { z } from "zod";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { sendDm, sendToChat, editMessage, sendTypingAction, getUpdates, subscribeWebhook, deleteWebhook, getBotInfo } from "./client.js";
 import { getMaxRuntime } from "./runtime.js";
@@ -21,7 +22,17 @@ import { createWebhookHandler, handleUpdate } from "./webhook-handler.js";
 import type { ResolvedMaxAccount } from "./types.js";
 
 const CHANNEL_ID = "max";
-const MaxConfigSchema = emptyPluginConfigSchema();
+
+const MaxConfigSchema = buildChannelConfigSchema(
+  z.object({
+    token: z.string().optional().describe("MAX Bot API token (from business.max.ru)"),
+    enabled: z.boolean().optional().default(true).describe("Enable or disable this channel"),
+    dmPolicy: z.enum(["open", "allowlist", "closed"]).optional().default("allowlist").describe("Who can send DMs"),
+    allowFrom: z.array(z.string()).optional().describe("Allowed MAX user IDs (when dmPolicy=allowlist)"),
+    webhookUrl: z.string().optional().describe("Webhook URL for production mode (optional, uses long polling if not set)"),
+    webhookSecret: z.string().optional().describe("Webhook secret for verifying MAX requests"),
+  }).passthrough()
+);
 
 // Track active webhook route unregisters per account
 const activeRouteUnregisters = new Map<string, () => void>();
