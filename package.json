@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/max",
+  "name": "@olegbalbekov/openclaw-max",
   "version": "0.1.0",
   "description": "MAX messenger (max.ru) channel plugin for OpenClaw",
   "type": "module",
@@ -44,7 +44,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/olegbalbekov/openclaw-max.git"
+    "url": "git+https://github.com/olegbalbekov/openclaw-max.git"
   },
   "homepage": "https://github.com/olegbalbekov/openclaw-max",
   "bugs": {

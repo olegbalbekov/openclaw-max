@@ -7,7 +7,7 @@ Connect your OpenClaw AI assistant to [MAX](https://max.ru) — the Russian mess
 ## Install
 
 ```bash
-openclaw plugins install @openclaw/max
+openclaw plugins install @olegbalbekov/openclaw-max
 ```
 
 ## Setup
