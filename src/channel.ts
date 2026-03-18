@@ -129,7 +129,7 @@ function createStreamingDeliver(
       if (!creationPromise) {
         // First call: create message, lock against concurrent calls
         creationPromise = (async () => {
-          messageId = await sendReply(account, chatId, chatType, accumulated + " ▌");
+          messageId = await sendReply(account, chatId, chatType, accumulated + " …");
           lastEditAt = Date.now();
           log?.info?.(`[openclaw-max] Streaming started mid=${messageId}`);
         })();
@@ -138,7 +138,7 @@ function createStreamingDeliver(
       return;
     }
 
-    await throttledEdit(accumulated + " ▌");
+    await throttledEdit(accumulated + " …");
   }
 
   // Called once at end with final authoritative text
