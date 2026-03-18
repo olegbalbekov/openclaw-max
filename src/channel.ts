@@ -59,66 +59,81 @@ async function sendReply(
 }
 
 /**
- * Create a streaming deliverer that:
- * 1. Sends first chunk as a new message with ▌ cursor
- * 2. Edits that message as more chunks arrive (throttled to avoid rate limits)
- * 3. finalize() does a final edit removing the cursor
+ * Create a streaming deliverer:
+ * - onPartialToken(text): called per streaming token → sends/edits message with ▌ cursor
+ * - deliver(payload): called once at end with full text → final clean edit (no cursor)
  */
 function createStreamingDeliver(
   account: ResolvedMaxAccount,
   chatId: string,
   chatType: string,
   log?: any,
-): { deliver: (payload: { text?: string; body?: string }) => Promise<void>; finalize: () => Promise<void> } {
+): {
+  onPartialToken: (text: string) => Promise<void>;
+  deliver: (payload: { text?: string; body?: string }) => Promise<void>;
+} {
   let messageId: string | null = null;
   let accumulated = "";
   let lastEditAt = 0;
   let pendingEdit: ReturnType<typeof setTimeout> | null = null;
 
-  async function doEdit(text: string) {
+  async function throttledEdit(text: string) {
     if (!messageId) return;
-    await editMessage(account.token, messageId, text);
-    lastEditAt = Date.now();
-  }
-
-  async function deliver(payload: { text?: string; body?: string }) {
-    const chunk = payload?.text ?? payload?.body ?? "";
-    if (!chunk) return;
-
-    if (!messageId) {
-      // First chunk: send new message with cursor
-      accumulated = chunk;
-      messageId = await sendReply(account, chatId, chatType, accumulated + " ▌");
-      lastEditAt = Date.now();
-      log?.info?.(`[openclaw-max] Streaming started, mid=${messageId}`);
-      return;
-    }
-
-    // Subsequent chunks: accumulate + throttled edit
-    accumulated += chunk;
     const elapsed = Date.now() - lastEditAt;
-
     if (pendingEdit) clearTimeout(pendingEdit);
-
     if (elapsed >= STREAM_EDIT_INTERVAL_MS) {
-      await doEdit(accumulated + " ▌");
+      await editMessage(account.token, messageId, text);
+      lastEditAt = Date.now();
     } else {
-      pendingEdit = setTimeout(() => {
-        doEdit(accumulated + " ▌").catch(() => {});
+      pendingEdit = setTimeout(async () => {
+        if (messageId) {
+          await editMessage(account.token, messageId, text).catch(() => {});
+          lastEditAt = Date.now();
+        }
       }, STREAM_EDIT_INTERVAL_MS - elapsed) as unknown as ReturnType<typeof setTimeout>;
     }
   }
 
-  async function finalize() {
-    // Cancel any pending throttled edit
+  // Promise to prevent race condition on first message creation
+  let creationPromise: Promise<void> | null = null;
+
+  // Called for each streaming partial (text is CUMULATIVE — full text so far)
+  async function onPartialToken(text: string) {
+    if (!text) return;
+    accumulated = text; // SET not += (onPartialReply is cumulative)
+
+    if (!messageId) {
+      if (!creationPromise) {
+        // First call: create message, lock against concurrent calls
+        creationPromise = (async () => {
+          messageId = await sendReply(account, chatId, chatType, accumulated + " ▌");
+          lastEditAt = Date.now();
+          log?.info?.(`[openclaw-max] Streaming started mid=${messageId}`);
+        })();
+      }
+      await creationPromise;
+      return;
+    }
+
+    await throttledEdit(accumulated + " ▌");
+  }
+
+  // Called once at end with final authoritative text
+  async function deliver(payload: { text?: string; body?: string }) {
     if (pendingEdit) { clearTimeout(pendingEdit); pendingEdit = null; }
-    // Final edit without cursor
-    if (messageId && accumulated) {
-      await doEdit(accumulated);
+    const finalText = payload?.text ?? payload?.body ?? accumulated;
+    if (!finalText) return;
+
+    if (messageId) {
+      // Edit existing streamed message — remove cursor, use final text
+      await editMessage(account.token, messageId, finalText);
+    } else {
+      // No partial tokens came through — send fresh
+      await sendReply(account, chatId, chatType, finalText);
     }
   }
 
-  return { deliver, finalize };
+  return { onPartialToken, deliver };
 }
 
 /**
@@ -169,21 +184,23 @@ async function deliverMessage(
     CommandAuthorized: true,
   });
 
-  const { deliver: streamDeliver, finalize } = createStreamingDeliver(account, chatId, chatType, log);
+  const { onPartialToken, deliver } = createStreamingDeliver(account, chatId, chatType, log);
 
   await rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: msgCtx,
     cfg,
     dispatcherOptions: {
-      deliver: streamDeliver,
+      deliver,
       onReplyStart: () => {
         log?.info?.(`[openclaw-max] Agent reply started for ${senderName}`);
       },
     },
+    replyOptions: {
+      onPartialReply: async (payload: { text?: string }) => {
+        if (payload?.text) await onPartialToken(payload.text);
+      },
+    },
   });
-
-  // Remove ▌ cursor from last message
-  await finalize();
 }
 
 export function createMaxPlugin() {
