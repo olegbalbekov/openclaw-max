@@ -9,12 +9,11 @@
  */
 
 import {
-  buildChannelConfigSchema,
+  emptyPluginConfigSchema,
   DEFAULT_ACCOUNT_ID,
   setAccountEnabledInConfigSection,
   registerPluginHttpRoute,
-} from "openclaw/plugin-sdk/max";
-import { z } from "zod";
+} from "openclaw/plugin-sdk/synology-chat";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { sendDm, sendToChat, getUpdates, subscribeWebhook, deleteWebhook, getBotInfo } from "./client.js";
 import { getMaxRuntime } from "./runtime.js";
@@ -22,7 +21,7 @@ import { createWebhookHandler, handleUpdate } from "./webhook-handler.js";
 import type { ResolvedMaxAccount } from "./types.js";
 
 const CHANNEL_ID = "max";
-const MaxConfigSchema = buildChannelConfigSchema(z.object({}).passthrough());
+const MaxConfigSchema = emptyPluginConfigSchema();
 
 // Track active webhook route unregisters per account
 const activeRouteUnregisters = new Map<string, () => void>();

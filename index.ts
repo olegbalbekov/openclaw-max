@@ -3,8 +3,8 @@
  * https://github.com/olegbalbekov/openclaw-max
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/max";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/max";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/synology-chat";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/synology-chat";
 import { createMaxPlugin } from "./src/channel.js";
 import { setMaxRuntime } from "./src/runtime.js";
 
