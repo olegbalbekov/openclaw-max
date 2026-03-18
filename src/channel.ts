@@ -15,7 +15,7 @@ import {
   registerPluginHttpRoute,
 } from "openclaw/plugin-sdk/synology-chat";
 import { listAccountIds, resolveAccount } from "./accounts.js";
-import { sendDm, sendToChat, getUpdates, subscribeWebhook, deleteWebhook, getBotInfo } from "./client.js";
+import { sendDm, sendToChat, editMessage, getUpdates, subscribeWebhook, deleteWebhook, getBotInfo } from "./client.js";
 import { getMaxRuntime } from "./runtime.js";
 import { createWebhookHandler, handleUpdate } from "./webhook-handler.js";
 import type { ResolvedMaxAccount } from "./types.js";
@@ -35,23 +35,90 @@ function waitUntilAbort(signal?: AbortSignal, onAbort?: () => void): Promise<voi
   });
 }
 
+/** Minimum interval between streaming edits (ms) to avoid rate limits */
+const STREAM_EDIT_INTERVAL_MS = 800;
+
 /**
  * Send a reply to the user based on chat type.
+ * Returns the message_id (for streaming edits).
  */
 async function sendReply(
   account: ResolvedMaxAccount,
   chatId: string,
   chatType: string,
   text: string,
-): Promise<void> {
+): Promise<string | null> {
   const numericId = parseInt(chatId, 10);
-  if (isNaN(numericId)) return;
+  if (isNaN(numericId)) return null;
 
   if (chatType === "direct") {
-    await sendDm(account.token, numericId, text);
+    return sendDm(account.token, numericId, text);
   } else {
-    await sendToChat(account.token, numericId, text);
+    return sendToChat(account.token, numericId, text);
   }
+}
+
+/**
+ * Create a streaming deliverer that:
+ * 1. Sends first chunk as a new message with ▌ cursor
+ * 2. Edits that message as more chunks arrive (throttled to avoid rate limits)
+ * 3. finalize() does a final edit removing the cursor
+ */
+function createStreamingDeliver(
+  account: ResolvedMaxAccount,
+  chatId: string,
+  chatType: string,
+  log?: any,
+): { deliver: (payload: { text?: string; body?: string }) => Promise<void>; finalize: () => Promise<void> } {
+  let messageId: string | null = null;
+  let accumulated = "";
+  let lastEditAt = 0;
+  let pendingEdit: ReturnType<typeof setTimeout> | null = null;
+
+  async function doEdit(text: string) {
+    if (!messageId) return;
+    await editMessage(account.token, messageId, text);
+    lastEditAt = Date.now();
+  }
+
+  async function deliver(payload: { text?: string; body?: string }) {
+    const chunk = payload?.text ?? payload?.body ?? "";
+    if (!chunk) return;
+
+    if (!messageId) {
+      // First chunk: send new message with cursor
+      accumulated = chunk;
+      messageId = await sendReply(account, chatId, chatType, accumulated + " ▌");
+      lastEditAt = Date.now();
+      log?.info?.(`[openclaw-max] Streaming started, mid=${messageId}`);
+      return;
+    }
+
+    // Subsequent chunks: accumulate + throttled edit
+    accumulated += chunk;
+    const elapsed = Date.now() - lastEditAt;
+
+    if (pendingEdit) clearTimeout(pendingEdit);
+
+    if (elapsed >= STREAM_EDIT_INTERVAL_MS) {
+      await doEdit(accumulated + " ▌");
+    } else {
+      pendingEdit = setTimeout(() => {
+        doEdit(accumulated + " ▌").catch(() => {});
+      }, STREAM_EDIT_INTERVAL_MS - elapsed) as unknown as ReturnType<typeof setTimeout>;
+    }
+  }
+
+  async function finalize() {
+    // Cancel any pending throttled edit
+    if (pendingEdit) { clearTimeout(pendingEdit); pendingEdit = null; }
+    // Final edit without cursor
+    if (messageId && accumulated) {
+      await doEdit(accumulated);
+    }
+  }
+
+  return { deliver, finalize };
 }
 
 /**
@@ -102,21 +169,21 @@ async function deliverMessage(
     CommandAuthorized: true,
   });
 
+  const { deliver: streamDeliver, finalize } = createStreamingDeliver(account, chatId, chatType, log);
+
   await rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: msgCtx,
     cfg,
     dispatcherOptions: {
-      deliver: async (payload: { text?: string; body?: string }) => {
-        const replyText = payload?.text ?? payload?.body;
-        if (replyText) {
-          await sendReply(account, chatId, chatType, replyText);
-        }
-      },
+      deliver: streamDeliver,
       onReplyStart: () => {
         log?.info?.(`[openclaw-max] Agent reply started for ${senderName}`);
       },
     },
   });
+
+  // Remove ▌ cursor from last message
+  await finalize();
 }
 
 export function createMaxPlugin() {

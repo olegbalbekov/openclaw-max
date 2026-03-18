@@ -13,7 +13,7 @@ const LONG_POLL_TIMEOUT_SEC = 30;
 
 async function maxRequest<T>(
   token: string,
-  method: "GET" | "POST" | "DELETE",
+  method: "GET" | "POST" | "DELETE" | "PUT",
   path: string,
   params?: Record<string, string | number>,
   body?: unknown,
@@ -57,26 +57,46 @@ async function maxRequest<T>(
 
 /**
  * Send a text message to a MAX user (DM).
+ * Returns the message_id for later editing (streaming), or null on failure.
  */
-export async function sendDm(token: string, userId: number, text: string): Promise<boolean> {
+export async function sendDm(token: string, userId: number, text: string): Promise<string | null> {
   try {
-    await maxRequest(token, "POST", "/messages", { user_id: userId }, { text, format: "markdown" });
-    return true;
+    const res = await maxRequest<{ message?: { body?: { mid?: string } } }>(
+      token, "POST", "/messages", { user_id: userId }, { text, format: "markdown" }
+    );
+    return res?.message?.body?.mid ?? null;
   } catch (err) {
     console.warn(`[openclaw-max] sendDm error: ${err instanceof Error ? err.message : err}`);
-    return false;
+    return null;
   }
 }
 
 /**
  * Send a text message to a MAX chat.
+ * Returns the message_id for later editing (streaming), or null on failure.
  */
-export async function sendToChat(token: string, chatId: number, text: string): Promise<boolean> {
+export async function sendToChat(token: string, chatId: number, text: string): Promise<string | null> {
   try {
-    await maxRequest(token, "POST", "/messages", { chat_id: chatId }, { text, format: "markdown" });
-    return true;
+    const res = await maxRequest<{ message?: { body?: { mid?: string } } }>(
+      token, "POST", "/messages", { chat_id: chatId }, { text, format: "markdown" }
+    );
+    return res?.message?.body?.mid ?? null;
   } catch (err) {
     console.warn(`[openclaw-max] sendToChat error: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
+
+/**
+ * Edit an existing message (for streaming updates).
+ * PUT /messages?message_id={id}
+ */
+export async function editMessage(token: string, messageId: string, text: string): Promise<boolean> {
+  try {
+    await maxRequest(token, "PUT", "/messages", { message_id: messageId }, { text, format: "markdown" });
+    return true;
+  } catch (err) {
+    console.warn(`[openclaw-max] editMessage error: ${err instanceof Error ? err.message : err}`);
     return false;
   }
 }
