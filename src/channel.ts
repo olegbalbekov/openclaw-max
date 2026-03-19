@@ -24,8 +24,9 @@ import type { ResolvedMaxAccount } from "./types.js";
 
 const CHANNEL_ID = "max";
 
-/** Active typing-stop callbacks keyed by chatId — lets sendMedia stop typing after image send */
+/** Active typing-stop callbacks keyed by unique instance id — lets sendMedia stop all typing */
 const activeTypingStops = new Map<string, () => void>();
+let typingStopSeq = 0;
 
 const MaxConfigSchema = buildChannelConfigSchema(
   z.object({
@@ -103,17 +104,20 @@ function createStreamingDeliver(
     }, 4000);
   }
 
+  // Unique key for this deliver instance (not chatId — concurrent messages share chatId)
+  const instanceKey = String(++typingStopSeq);
+
   // Safety timeout — stop typing after 90s even if deliver() is never called
   const safetyTimer = setTimeout(() => stopTyping(), 90_000);
 
   function stopTyping() {
     clearTimeout(safetyTimer);
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null; }
-    activeTypingStops.delete(chatId);
+    activeTypingStops.delete(instanceKey);
   }
 
-  // Register so sendMedia can stop typing if agent replies with only an image
-  activeTypingStops.set(chatId, stopTyping);
+  // Register so sendMedia can stop ALL active typing intervals
+  activeTypingStops.set(instanceKey, stopTyping);
 
   async function throttledEdit(text: string) {
     if (!messageId) return;
