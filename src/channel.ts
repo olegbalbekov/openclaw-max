@@ -24,6 +24,9 @@ import type { ResolvedMaxAccount } from "./types.js";
 
 const CHANNEL_ID = "max";
 
+/** Active typing-stop callbacks keyed by chatId — lets sendMedia stop typing after image send */
+const activeTypingStops = new Map<string, () => void>();
+
 const MaxConfigSchema = buildChannelConfigSchema(
   z.object({
     token: z.string().optional().describe("MAX Bot API token (from business.max.ru)"),
@@ -102,7 +105,11 @@ function createStreamingDeliver(
 
   function stopTyping() {
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null; }
+    activeTypingStops.delete(chatId);
   }
+
+  // Register so sendMedia can stop typing if agent replies with only an image
+  activeTypingStops.set(chatId, stopTyping);
 
   async function throttledEdit(text: string) {
     if (!messageId) return;
@@ -386,6 +393,10 @@ export function createMaxPlugin(): any {
             mid = await sendDm(account.token, numericId, text);
           }
         }
+
+        // Stop typing indicator — deliver() may not be called if agent replied with only media
+        const stopTypingFn = activeTypingStops.get(String(numericId));
+        if (stopTypingFn) stopTypingFn();
 
         return { channel: CHANNEL_ID, messageId: mid ?? `max-${Date.now()}`, chatId: to };
       },
