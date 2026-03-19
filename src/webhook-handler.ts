@@ -89,7 +89,7 @@ export interface WebhookHandlerDeps {
 }
 
 function extractMessage(update: MaxUpdate): MaxMessage | null {
-  if (update.update_type === "message_created" || update.update_type === "message_edited") {
+  if (update.update_type === "message_created") {
     return update.message ?? null;
   }
   return null;
