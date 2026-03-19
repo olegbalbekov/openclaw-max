@@ -135,7 +135,6 @@ export async function getUpdates(
     url.searchParams.set(k, String(v));
   }
 
-  const controller = new AbortController();
   // Combine external abort signal with our timeout
   const combinedSignal = signal
     ? AbortSignal.any([signal, AbortSignal.timeout((timeoutSec + 10) * 1000)])
@@ -190,4 +189,92 @@ export async function deleteWebhook(token: string): Promise<void> {
  */
 export async function getBotInfo(token: string): Promise<{ name: string; username: string }> {
   return maxRequest(token, "GET", "/me");
+}
+
+/**
+ * Скачать файл по URL.
+ */
+export async function downloadFile(token: string, url: string): Promise<Buffer | null> {
+  try {
+    const res = await fetch(url, { headers: { Authorization: token } });
+    if (!res.ok) return null;
+    return Buffer.from(await res.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Получить URL для загрузки медиафайла.
+ * type передаётся как query param.
+ */
+export async function getUploadUrl(token: string, type: "image" | "video" | "audio" | "file"): Promise<string | null> {
+  try {
+    const res = await maxRequest<{ url: string }>(token, "POST", "/uploads", { type });
+    return res?.url ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Загрузить файл по upload URL (multipart/form-data).
+ * Возвращает { token } из ответа или null.
+ */
+export async function uploadFile(uploadUrl: string, buffer: Buffer, mimeType: string, filename: string): Promise<{ token: string } | null> {
+  try {
+    const form = new FormData();
+    form.append("data", new Blob([buffer], { type: mimeType }), filename);
+    const res = await fetch(uploadUrl, { method: "POST", body: form });
+    if (!res.ok) return null;
+    const json = await res.json() as Record<string, unknown>;
+    // Direct token at top level
+    if (typeof json.token === "string") return { token: json.token };
+    // Photos response: { photos: { <key>: { token: string } } }
+    if (json.photos && typeof json.photos === "object") {
+      const firstVal = Object.values(json.photos as Record<string, unknown>)[0] as Record<string, unknown> | undefined;
+      if (firstVal && typeof firstVal.token === "string") return { token: firstVal.token };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Отправить сообщение с изображением в DM.
+ */
+export async function sendDmWithImage(token: string, userId: number, text: string, imageToken: string): Promise<string | null> {
+  try {
+    const body: Record<string, unknown> = {
+      attachments: [{ type: "image", payload: { token: imageToken } }],
+    };
+    if (text) body.text = text;
+    const res = await maxRequest<{ message?: { body?: { mid?: string } } }>(
+      token, "POST", "/messages", { user_id: userId }, body
+    );
+    return res?.message?.body?.mid ?? null;
+  } catch (err) {
+    console.warn(`[openclaw-max] sendDmWithImage error: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
+
+/**
+ * Отправить сообщение с изображением в чат.
+ */
+export async function sendToChatWithImage(token: string, chatId: number, text: string, imageToken: string): Promise<string | null> {
+  try {
+    const body: Record<string, unknown> = {
+      attachments: [{ type: "image", payload: { token: imageToken } }],
+    };
+    if (text) body.text = text;
+    const res = await maxRequest<{ message?: { body?: { mid?: string } } }>(
+      token, "POST", "/messages", { chat_id: chatId }, body
+    );
+    return res?.message?.body?.mid ?? null;
+  } catch (err) {
+    console.warn(`[openclaw-max] sendToChatWithImage error: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
 }

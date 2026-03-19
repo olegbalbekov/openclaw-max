@@ -16,9 +16,10 @@ import {
 } from "openclaw/plugin-sdk/synology-chat";
 import { z } from "zod";
 import { listAccountIds, resolveAccount } from "./accounts.js";
-import { sendDm, sendToChat, editMessage, sendTypingAction, getUpdates, subscribeWebhook, deleteWebhook, getBotInfo } from "./client.js";
+import { sendDm, sendToChat, sendDmWithImage, sendToChatWithImage, editMessage, sendTypingAction, getUpdates, subscribeWebhook, deleteWebhook, getBotInfo, getUploadUrl, uploadFile } from "./client.js";
 import { getMaxRuntime } from "./runtime.js";
 import { createWebhookHandler, handleUpdate } from "./webhook-handler.js";
+import type { InboundImage } from "./webhook-handler.js";
 import type { ResolvedMaxAccount } from "./types.js";
 
 const CHANNEL_ID = "max";
@@ -182,8 +183,9 @@ async function deliverMessage(
     chatId,
     dialogChatId,
     chatType,
-    messageId,
+    messageId: _messageId,
     accountId,
+    images,
   }: {
     text: string;
     senderId: string;
@@ -191,8 +193,9 @@ async function deliverMessage(
     chatId: string;
     dialogChatId: string;
     chatType: string;
-    messageId: string;
+    messageId: string; // bound as _messageId (unused but part of interface)
     accountId: string;
+    images?: InboundImage[];
   },
   account: ResolvedMaxAccount,
   cfg: unknown,
@@ -236,11 +239,17 @@ async function deliverMessage(
       onPartialReply: async (payload: { text?: string }) => {
         if (payload?.text) await onPartialToken(payload.text);
       },
+      images: images?.map(img => ({
+        type: "image" as const,
+        mimeType: img.mimeType,
+        data: img.data,
+      })),
     },
   });
 }
 
-export function createMaxPlugin() {
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
+export function createMaxPlugin(): any {
   return {
     id: CHANNEL_ID,
 
@@ -257,7 +266,7 @@ export function createMaxPlugin() {
 
     capabilities: {
       chatTypes: ["direct" as const, "group" as const],
-      media: false,
+      media: true,
       threads: false,
       reactions: false,
       edit: false,
@@ -313,6 +322,7 @@ export function createMaxPlugin() {
           policy: account.dmPolicy,
           allowFrom: account.allowFrom,
           policyPath: `channels.max.dmPolicy`,
+          allowFromPath: `channels.max.allowFrom`,
           approveHint: "openclaw pairing approve max <code>",
         };
       },
@@ -340,8 +350,44 @@ export function createMaxPlugin() {
         return { channel: CHANNEL_ID, messageId: `max-${Date.now()}`, chatId: to };
       },
 
-      sendMedia: async () => {
-        throw new Error("Media attachments are not yet supported in the MAX channel plugin.");
+      sendMedia: async ({ to, buffer, mimeType, filename, caption, accountId, cfg, chatType }: any) => {
+        const account = resolveAccount(cfg ?? {}, accountId);
+        if (!account.token) throw new Error("MAX token not configured");
+
+        const numericId = parseInt(to.replace(/^max:(?:user:)?/i, ""), 10);
+        if (isNaN(numericId)) throw new Error(`Invalid MAX user ID: ${to}`);
+
+        // Determine media type
+        const mediaType = mimeType?.startsWith("image/") ? "image"
+          : mimeType?.startsWith("video/") ? "video"
+          : mimeType?.startsWith("audio/") ? "audio"
+          : "file";
+
+        // Get upload URL
+        const uploadUrl = await getUploadUrl(account.token, mediaType as "image" | "video" | "audio" | "file");
+        if (!uploadUrl) throw new Error("Failed to get MAX upload URL");
+
+        // Upload file
+        const uploaded = await uploadFile(uploadUrl, buffer, mimeType ?? "application/octet-stream", filename ?? "file");
+        if (!uploaded) throw new Error("Failed to upload file to MAX");
+
+        // Send message with attachment
+        const text = caption ?? "";
+        let mid: string | null = null;
+        if (mediaType === "image") {
+          if (chatType === "direct" || !chatType) {
+            mid = await sendDmWithImage(account.token, numericId, text, uploaded.token);
+          } else {
+            mid = await sendToChatWithImage(account.token, numericId, text, uploaded.token);
+          }
+        } else {
+          // For non-image media, fall back to text with caption
+          if (text) {
+            mid = await sendDm(account.token, numericId, text);
+          }
+        }
+
+        return { channel: CHANNEL_ID, messageId: mid ?? `max-${Date.now()}`, chatId: to };
       },
     },
 
@@ -402,7 +448,7 @@ export function createMaxPlugin() {
 
 // ─── Webhook mode ─────────────────────────────────────────────────────────────
 
-async function startWebhookMode(ctx: any, account: ResolvedMaxAccount, cfg: unknown, log: any) {
+async function startWebhookMode(ctx: any, account: ResolvedMaxAccount, _cfg: unknown, log: any) {
   log?.info?.(`[openclaw-max] Starting in webhook mode → ${account.webhookUrl}`);
 
   // Register webhook with MAX
@@ -458,7 +504,7 @@ async function startWebhookMode(ctx: any, account: ResolvedMaxAccount, cfg: unkn
 
 // ─── Long polling mode ────────────────────────────────────────────────────────
 
-async function startLongPollingMode(ctx: any, account: ResolvedMaxAccount, cfg: unknown, log: any) {
+async function startLongPollingMode(ctx: any, account: ResolvedMaxAccount, _cfg: unknown, log: any) {
   log?.info?.(`[openclaw-max] Starting in long polling mode`);
 
   const signal: AbortSignal = ctx.abortSignal;

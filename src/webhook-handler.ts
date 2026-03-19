@@ -7,6 +7,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { MaxUpdate, MaxMessage, ResolvedMaxAccount } from "./types.js";
+import { downloadFile } from "./client.js";
 
 const MAX_BODY_BYTES = 1_048_576; // 1 MB
 
@@ -44,6 +45,26 @@ function validateSecret(req: IncomingMessage, secret?: string): boolean {
   return header === secret;
 }
 
+export interface InboundImage {
+  data: string; // base64
+  mimeType: string;
+}
+
+/** Detect image MIME type from magic bytes */
+function detectMimeType(buf: Buffer): string {
+  // PNG: 89 50 4E 47
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return "image/png";
+  // JPEG: FF D8 FF
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return "image/jpeg";
+  // WebP: RIFF....WEBP
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+      buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return "image/webp";
+  // GIF: GIF8
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return "image/gif";
+  // fallback
+  return "image/jpeg";
+}
+
 export interface WebhookDeliverMsg {
   text: string;
   senderId: string;
@@ -54,6 +75,7 @@ export interface WebhookDeliverMsg {
   chatType: "direct" | "chat" | "channel";
   messageId: string;
   accountId: string;
+  images?: InboundImage[];
 }
 
 export interface WebhookHandlerDeps {
@@ -126,8 +148,9 @@ export async function handleUpdate(
   const msg = extractMessage(update);
   if (!msg) return; // ignore non-message events for now
 
-  const text = msg.body?.text?.trim();
-  if (!text) return;
+  const text = msg.body?.text?.trim() ?? "";
+  const imageAttachments = (msg.body?.attachments ?? []).filter(a => a.type === "image");
+  if (!text && imageAttachments.length === 0) return;
 
   const sender = msg.sender;
   if (!sender) return;
@@ -157,6 +180,17 @@ export async function handleUpdate(
 
   log?.info(`[openclaw-max] Message from ${senderName} (${senderId}): ${text.slice(0, 80)}`);
 
+  // Download image attachments
+  const images: InboundImage[] = [];
+  for (const att of imageAttachments) {
+    const url = att.payload?.url;
+    if (!url) continue;
+    const buf = await downloadFile(account.token, url);
+    if (!buf) continue;
+    const mimeType = detectMimeType(buf);
+    images.push({ data: buf.toString("base64"), mimeType });
+  }
+
   try {
     await deliver({
       text,
@@ -167,6 +201,7 @@ export async function handleUpdate(
       chatType,
       messageId,
       accountId: account.accountId,
+      images: images.length > 0 ? images : undefined,
     });
   } catch (err) {
     log?.error(

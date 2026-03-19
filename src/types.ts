@@ -55,11 +55,24 @@ export interface MaxRecipient {
   chat_type?: "dialog" | "chat" | "channel";
 }
 
+export interface MaxImagePayload {
+  token?: string;
+  url?: string;
+  file_id?: string;
+  width?: number;
+  height?: number;
+}
+
+export interface MaxAttachment {
+  type: "image" | "video" | "audio" | "file" | "inline_keyboard" | "sticker" | "location";
+  payload: MaxImagePayload;
+}
+
 export interface MaxMessageBody {
   mid: string;
   seq: number;
   text?: string;
-  attachments?: unknown[];
+  attachments?: MaxAttachment[];
 }
 
 export interface MaxMessage {

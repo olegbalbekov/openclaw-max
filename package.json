@@ -1,6 +1,6 @@
 {
   "name": "@olegbalbekov/openclaw-max",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MAX messenger (max.ru) channel plugin for OpenClaw",
   "type": "module",
   "main": "./dist/index.js",
@@ -28,7 +28,7 @@
   },
   "devDependencies": {
     "openclaw": "*",
-    "typescript": "^5.8.0"
+    "typescript": "^5.9.3"
   },
   "keywords": [
     "openclaw",
@@ -51,7 +51,7 @@
   },
   "openclaw": {
     "extensions": [
-      "./index.ts"
+      "./dist/index.js"
     ],
     "channel": {
       "id": "max",

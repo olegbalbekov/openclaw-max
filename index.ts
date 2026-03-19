@@ -8,7 +8,8 @@ import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/synology-chat";
 import { createMaxPlugin } from "./src/channel.js";
 import { setMaxRuntime } from "./src/runtime.js";
 
-const plugin = {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const plugin: any = {
   id: "max",
   name: "MAX",
   description: "MAX messenger (max.ru) channel plugin for OpenClaw",
