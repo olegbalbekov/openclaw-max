@@ -103,7 +103,11 @@ function createStreamingDeliver(
     }, 4000);
   }
 
+  // Safety timeout — stop typing after 90s even if deliver() is never called
+  const safetyTimer = setTimeout(() => stopTyping(), 90_000);
+
   function stopTyping() {
+    clearTimeout(safetyTimer);
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null; }
     activeTypingStops.delete(chatId);
   }
@@ -394,9 +398,9 @@ export function createMaxPlugin(): any {
           }
         }
 
-        // Stop typing indicator — deliver() may not be called if agent replied with only media
-        const stopTypingFn = activeTypingStops.get(String(numericId));
-        if (stopTypingFn) stopTypingFn();
+        // Stop ALL active typing indicators — deliver() may not be called after sendMedia
+        for (const stopFn of activeTypingStops.values()) stopFn();
+        activeTypingStops.clear();
 
         return { channel: CHANNEL_ID, messageId: mid ?? `max-${Date.now()}`, chatId: to };
       },
