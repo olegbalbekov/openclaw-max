@@ -7,7 +7,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { MaxUpdate, MaxMessage, ResolvedMaxAccount } from "./types.js";
-import { downloadFile, sendTypingAction } from "./client.js";
+import { downloadFile } from "./client.js";
 
 const MAX_BODY_BYTES = 1_048_576; // 1 MB
 
@@ -180,22 +180,7 @@ export async function handleUpdate(
 
   log?.info(`[openclaw-max] Message from ${senderName} (${senderId}): ${text.slice(0, 80)}`);
 
-  // Send typing indicator immediately — before context loading & LLM (which can take 10-30s)
-  const numericDialogChatId = parseInt(dialogChatId, 10);
-  let earlyTypingInterval: ReturnType<typeof setInterval> | null = null;
-  if (!isNaN(numericDialogChatId)) {
-    sendTypingAction(account.token, numericDialogChatId).catch(() => {});
-    earlyTypingInterval = setInterval(() => {
-      sendTypingAction(account.token, numericDialogChatId).catch(() => {});
-    }, 4000);
-  }
 
-  const stopEarlyTyping = () => {
-    if (earlyTypingInterval) {
-      clearInterval(earlyTypingInterval);
-      earlyTypingInterval = null;
-    }
-  };
 
   // Download image attachments
   const images: InboundImage[] = [];
@@ -224,8 +209,6 @@ export async function handleUpdate(
     log?.error(
       `[openclaw-max] Deliver error: ${err instanceof Error ? err.message : String(err)}`,
     );
-  } finally {
-    stopEarlyTyping();
   }
 }
 
