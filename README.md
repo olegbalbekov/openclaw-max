@@ -1,128 +1,143 @@
-# @openclaw/max
+# @olegbalbekov/openclaw-max
 
-MAX messenger (max.ru) channel plugin for [OpenClaw](https://openclaw.ai).
+MAX messenger (max.ru) channel plugin for [OpenClaw](https://github.com/openclaw/openclaw).
 
-Connect your OpenClaw AI assistant to [MAX](https://max.ru) — the Russian messenger by VK. Supports direct messages and group chats via the MAX Bot API.
+> **Requires OpenClaw ≥ 2026.3.24**
 
-## Install
+## Features
+
+- DM and group chat support
+- Long polling (default) and webhook modes
+- Streaming replies with typing indicator
+- Media sending and receiving (images)
+- Allowlist-based access control
+
+## Installation
+
+### 1. Install the plugin
 
 ```bash
 openclaw plugins install @olegbalbekov/openclaw-max
 ```
 
-## Setup
+Or manually — clone/copy the plugin directory into `~/.openclaw/extensions/max/` and add to your config:
 
-### 1. Create a MAX bot
+```json5
+{
+  plugins: {
+    load: {
+      paths: ["~/.openclaw/extensions/max"]
+    },
+    entries: {
+      max: { enabled: true }
+    }
+  }
+}
+```
 
-1. Register at [business.max.ru](https://business.max.ru/self) as a legal entity or sole proprietor (required by MAX platform)
-2. Create a bot and wait for moderation
-3. Get your bot token from **Чат-боты → Интеграция → Получить токен**
+> **Important:** Do NOT add `plugins.allow` unless you explicitly need it. When `plugins.allow` is set, it acts as a strict allowlist and will block all bundled plugins (including Telegram) that are not listed. Use `plugins.entries` instead to enable/disable individual plugins.
 
-### 2. Configure OpenClaw
+### 2. Get a MAX bot token
 
-Add to your OpenClaw config:
+1. Go to [business.max.ru](https://business.max.ru) and create a bot
+2. Copy the bot token
+
+### 3. Configure OpenClaw
+
+Add to `~/.openclaw/openclaw.json`:
 
 ```json5
 {
   channels: {
     max: {
       enabled: true,
-      token: "YOUR_BOT_TOKEN",
-      dmPolicy: "allowlist",
-      allowFrom: ["12345678"]  // your MAX user ID
+      token: "YOUR_BOT_TOKEN_HERE",
+      dmPolicy: "allowlist",       // "open" | "allowlist" | "closed"
+      allowFrom: ["YOUR_USER_ID"], // MAX user IDs (strings)
     }
-  }
+  },
+  bindings: [
+    {
+      agentId: "main",
+      match: { channel: "max", accountId: "default" }
+    }
+  ]
 }
 ```
 
-Or via environment variable:
+> **Note:** `allowFrom` values must be **strings**, not numbers: `["41123351"]` ✅, `[41123351]` ❌
+
+### 4. Restart the gateway
 
 ```bash
-MAX_BOT_TOKEN=your_token_here
+sudo systemctl restart openclaw
+# or
+openclaw gateway restart
 ```
 
-### 3. (Optional) Webhook mode
+### 5. Verify
 
-For production deployments, configure a webhook URL (requires HTTPS on port 443):
-
-```json5
-{
-  channels: {
-    max: {
-      token: "YOUR_BOT_TOKEN",
-      webhookUrl: "https://yourdomain.com/max/webhook",
-      webhookSecret: "your_random_secret",
-      dmPolicy: "open"
-    }
-  }
-}
+```bash
+openclaw channels status
 ```
 
-Without `webhookUrl`, the plugin falls back to **long polling** — which works fine for personal use and development.
+Should show: `MAX default: enabled, dm:allowlist, allow:YOUR_USER_ID`
 
-## Config reference
+## Configuration reference
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `token` | string | — | **Required.** MAX bot token |
-| `enabled` | boolean | `true` | Enable/disable the channel |
-| `webhookUrl` | string | — | Public HTTPS URL for webhook delivery |
-| `webhookSecret` | string | — | Secret for `X-Max-Bot-Api-Secret` header validation |
-| `webhookPath` | string | `/max/webhook` | Internal gateway route path |
-| `dmPolicy` | string | `pairing` | DM access policy: `open` / `allowlist` / `pairing` / `disabled` |
-| `allowFrom` | string[] | `[]` | Allowlisted MAX user IDs |
+| `token` | string | required | MAX Bot API token |
+| `enabled` | boolean | `true` | Enable/disable channel |
+| `dmPolicy` | string | `"allowlist"` | DM access policy: `open`, `allowlist`, `closed` |
+| `allowFrom` | string[] | `[]` | MAX user IDs allowed to DM (when dmPolicy=allowlist) |
+| `webhookUrl` | string | — | Webhook URL (optional, uses long polling if not set) |
+| `webhookSecret` | string | — | Webhook secret for request verification |
 
-### DM policies
+## Webhook mode (optional)
 
-- `open` — anyone can message the bot
-- `allowlist` — only users in `allowFrom` can message
-- `pairing` — new users receive a pairing code; approve with `openclaw pairing approve max <code>`
-- `disabled` — no DMs accepted
-
-## Finding your MAX user ID
-
-Send any message to your bot, then check the OpenClaw logs — the sender's `user_id` is logged with each message.
-
-## Multiple accounts
+For production, configure a webhook instead of long polling:
 
 ```json5
 {
   channels: {
     max: {
-      accounts: {
-        personal: {
-          token: "TOKEN_1",
-          dmPolicy: "allowlist",
-          allowFrom: ["12345678"]
-        },
-        business: {
-          token: "TOKEN_2",
-          dmPolicy: "open"
-        }
-      }
+      token: "YOUR_BOT_TOKEN",
+      webhookUrl: "https://your-domain.com/api/channels/max/webhook",
+      webhookSecret: "your-secret"
     }
   }
 }
 ```
 
-## Limitations
+## Upgrading from 0.2.x
 
-- Media attachments: not yet supported (text only)
-- Reactions: not supported by MAX Bot API
-- Message editing: not supported
+If upgrading from v0.2.x with OpenClaw < 2026.3.24, the plugin imports changed:
 
-## Contributing
+- `openclaw/plugin-sdk/synology-chat` → removed
+- `buildChannelConfigSchema`, `DEFAULT_ACCOUNT_ID`, `setAccountEnabledInConfigSection` → `openclaw/plugin-sdk/core`
+- `registerPluginHttpRoute` → `openclaw/plugin-sdk/webhook-ingress`
+- Entry point now uses `defineChannelPluginEntry` from `openclaw/plugin-sdk/core`
 
-PRs welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md).
+Rebuild with `npm run build` after updating the openclaw devDependency to `>=2026.3.24`.
 
-## Sponsors
+## Troubleshooting
 
-Supported by [Evrone](https://evrone.com/?utm_source=openclaw-max) — a software development company that builds products and helps companies improve their development processes.
+**Plugin not starting / `channels.max: unknown channel id`**
 
-<a href="https://evrone.com/?utm_source=openclaw-max">
-  <img src="https://user-images.githubusercontent.com/417688/34437029-dbfe4ee6-ecab-11e7-9d80-2b274b4149b3.png"
-       alt="Sponsored by Evrone" width="231" />
-</a>
+- Check that OpenClaw version is ≥ 2026.3.24 (`openclaw --version`)
+- Check `OPENCLAW_VERSION` in `/opt/openclaw.env` matches actual installed version
+- Make sure `plugins.allow` is NOT set (or includes `"max"` explicitly)
+
+**Telegram stops working after adding MAX**
+
+- Do NOT set `plugins.allow: ["max"]` — this blocks all other plugins including Telegram
+- Use `plugins.entries.max.enabled: true` instead
+
+**Gateway won't start**
+
+- Validate config JSON: `python3 -c "import json; json.load(open('~/.openclaw/openclaw.json'))"`
+- Check logs: `journalctl -u openclaw -n 50`
 
 ## License
 

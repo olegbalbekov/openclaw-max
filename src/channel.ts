@@ -12,8 +12,8 @@ import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   setAccountEnabledInConfigSection,
-  registerPluginHttpRoute,
-} from "openclaw/plugin-sdk/synology-chat";
+} from "openclaw/plugin-sdk/core";
+import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { sendDm, sendToChat, sendDmWithImage, sendToChatWithImage, editMessage, sendTypingAction, getUpdates, subscribeWebhook, deleteWebhook, getBotInfo, getUploadUrl, uploadFile } from "./client.js";
