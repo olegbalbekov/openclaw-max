@@ -52,8 +52,8 @@ Add to `~/.openclaw/openclaw.json`:
     max: {
       enabled: true,
       token: "YOUR_BOT_TOKEN_HERE",
-      dmPolicy: "allowlist",       // "open" | "allowlist" | "closed"
-      allowFrom: ["YOUR_USER_ID"], // MAX user IDs (strings)
+      dmPolicy: "allowlist",         // "open" | "allowlist" | "closed"
+      allowFrom: ["YOUR_USER_ID"],   // MAX user IDs — must be strings
     }
   },
   bindings: [
@@ -64,8 +64,6 @@ Add to `~/.openclaw/openclaw.json`:
   ]
 }
 ```
-
-> **Note:** `allowFrom` values must be **strings**, not numbers: `["41123351"]` ✅, `[41123351]` ❌
 
 ### 4. Restart the gateway
 
@@ -138,6 +136,15 @@ Rebuild with `npm run build` after updating the openclaw devDependency to `>=202
 
 - Validate config JSON: `python3 -c "import json; json.load(open('~/.openclaw/openclaw.json'))"`
 - Check logs: `journalctl -u openclaw -n 50`
+
+## Supported by
+
+Supported by [Evrone](https://evrone.com/?utm_source=openclaw-max) — a software development company that builds products and helps companies improve their development processes.
+
+<a href="https://evrone.com/?utm_source=openclaw-max">
+  <img src="https://user-images.githubusercontent.com/417688/34437029-dbfe4ee6-ecab-11e7-9d80-2b274b4149b3.png"
+       alt="Sponsored by Evrone" width="231" />
+</a>
 
 ## License
 
