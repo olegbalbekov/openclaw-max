@@ -89,6 +89,8 @@ Should show: `MAX default: enabled, dm:allowlist, allow:YOUR_USER_ID`
 | `enabled` | boolean | `true` | Enable/disable channel |
 | `dmPolicy` | string | `"allowlist"` | DM access policy: `open`, `allowlist`, `closed` |
 | `allowFrom` | string[] | `[]` | MAX user IDs allowed to DM (when dmPolicy=allowlist) |
+| `groupPolicy` | string | `"allowlist"` | Group chat access policy: `open`, `allowlist`, `closed` |
+| `groupAllowFrom` | string[] | `[]` | MAX user IDs allowed in group chats (when groupPolicy=allowlist) |
 | `webhookUrl` | string | — | Webhook URL (optional, uses long polling if not set) |
 | `webhookSecret` | string | — | Webhook secret for request verification |
 
@@ -108,23 +110,11 @@ For production, configure a webhook instead of long polling:
 }
 ```
 
-## Upgrading from 0.2.x
-
-If upgrading from v0.2.x with OpenClaw < 2026.3.24, the plugin imports changed:
-
-- `openclaw/plugin-sdk/synology-chat` → removed
-- `buildChannelConfigSchema`, `DEFAULT_ACCOUNT_ID`, `setAccountEnabledInConfigSection` → `openclaw/plugin-sdk/core`
-- `registerPluginHttpRoute` → `openclaw/plugin-sdk/webhook-ingress`
-- Entry point now uses `defineChannelPluginEntry` from `openclaw/plugin-sdk/core`
-
-Rebuild with `npm run build` after updating the openclaw devDependency to `>=2026.3.24`.
-
 ## Troubleshooting
 
 **Plugin not starting / `channels.max: unknown channel id`**
 
 - Check that OpenClaw version is ≥ 2026.3.24 (`openclaw --version`)
-- Check `OPENCLAW_VERSION` in `/opt/openclaw.env` matches actual installed version
 - Make sure `plugins.allow` is NOT set (or includes `"max"` explicitly)
 
 **Telegram stops working after adding MAX**
