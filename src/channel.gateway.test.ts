@@ -71,9 +71,11 @@ vi.mock("./progress-draft.js", () => ({
   resolveMaxProgressLabel: () => "⏳ Работаю",
 }));
 
+const loadWebMedia = vi.fn();
 const dispatch = vi.fn((..._args: unknown[]) => Promise.resolve());
 vi.mock("./runtime.js", () => ({
   getMaxRuntime: () => ({
+    media: { loadWebMedia: (...args: unknown[]) => loadWebMedia(...args) },
     channel: {
       routing: { resolveAgentRoute: () => ({ sessionKey: "agent:main:max:direct:42" }) },
       reply: {
@@ -119,6 +121,7 @@ beforeEach(() => {
   client.sendTypingAction.mockResolvedValue(undefined);
   client.markSeen.mockResolvedValue(undefined);
   client.getBotInfo.mockResolvedValue({ name: "бот", username: "bot" });
+  loadWebMedia.mockResolvedValue({ buffer: Buffer.from("media") });
 });
 
 afterEach(() => {
@@ -143,6 +146,77 @@ describe("вебхук", () => {
     await expect(deliver(inbound)).resolves.toBeNull();
     expect(dispatch).toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      label: "картинку",
+      mediaUrl: "https://media.test/agent-reply.png",
+      setup: () => {
+        client.getUploadUrl.mockResolvedValue("https://upload.test/image");
+        client.uploadFile.mockResolvedValue({ token: "image-token" });
+        client.sendDmWithImage.mockResolvedValue("mid-image");
+      },
+      assertSent: () => {
+        expect(client.uploadFile).toHaveBeenCalledWith(
+          "https://upload.test/image",
+          Buffer.from("media"),
+          "image/png",
+          "agent-reply.png",
+        );
+        expect(client.sendDmWithImage).toHaveBeenCalledWith("tok", 42, "", "image-token");
+      },
+    },
+    {
+      label: "голосовой ответ",
+      mediaUrl: "https://media.test/agent-reply.ogg",
+      setup: () => {
+        client.createUpload.mockResolvedValue({
+          url: "https://upload.test/audio",
+          token: "audio-token",
+        });
+        client.uploadToUrl.mockResolvedValue({ token: "audio-token" });
+        client.sendWithAttachment.mockResolvedValue("mid-audio");
+      },
+      assertSent: () => {
+        expect(client.uploadToUrl).toHaveBeenCalledWith(
+          "https://upload.test/audio",
+          Buffer.from("media"),
+          "audio/ogg",
+          "agent-reply.ogg",
+        );
+        expect(client.sendWithAttachment).toHaveBeenCalledWith(
+          "tok",
+          { kind: "direct", id: 42 },
+          "",
+          { type: "audio", payload: { token: "audio-token" } },
+        );
+      },
+    },
+  ])(
+    "ответ агента читает и отправляет $label через runtime OpenClaw",
+    async ({ mediaUrl, setup, assertSent }) => {
+      setup();
+      dispatch.mockImplementationOnce(async (params: any) => {
+        await params.dispatcherOptions.deliver({ text: "", mediaUrl }, { kind: "final" });
+      });
+
+      const ctl = new AbortController();
+      const started = plugin.gateway.startAccount({
+        cfg,
+        accountId: "default",
+        log,
+        abortSignal: ctl.signal,
+      });
+      ctl.abort();
+      await started;
+
+      const deliver = webhookHandlerParams[0]?.deliver as (msg: unknown) => Promise<unknown>;
+      await expect(deliver(inbound)).resolves.toBeNull();
+
+      expect(loadWebMedia).toHaveBeenCalledWith(mediaUrl, { localRoots: "any" });
+      assertSent();
+    },
+  );
 
   it("повторный запуск снимает устаревший маршрут", async () => {
     // Второй запуск ДО остановки первого: именно так выглядит перезагрузка
@@ -394,7 +468,8 @@ describe("длинный опрос", () => {
 });
 
 describe("вложение по ссылке", () => {
-  const draftlessDeliverer = () =>
+  const mediaReadFile = vi.fn();
+  const draftlessDeliverer = (loader: ((ref: string) => Promise<Buffer>) | null = mediaReadFile) =>
     createStreamingDeliver(
       { accountId: "default", token: "tok", enabled: true } as never,
       "42",
@@ -404,13 +479,11 @@ describe("вложение по ссылке", () => {
       "progress" as never,
       "seed",
       log,
+      loader ?? undefined,
     );
 
-  it("картинка по http скачивается перед загрузкой", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      arrayBuffer: async () => new TextEncoder().encode("img").buffer,
-    } as never);
+  it("картинка по http читается platform loader перед загрузкой", async () => {
+    mediaReadFile.mockResolvedValueOnce(Buffer.from("img"));
     client.getUploadUrl.mockResolvedValue("https://up.test");
     client.uploadFile.mockResolvedValue({ token: "img" });
     client.sendDmWithImage.mockResolvedValue("mid-img");
@@ -419,21 +492,35 @@ describe("вложение по ссылке", () => {
     await deliver({ text: "", mediaUrl: "https://cdn.test/a.png" }, { kind: "final" });
     await finish();
 
-    expect(fetchSpy).toHaveBeenCalledWith("https://cdn.test/a.png");
+    expect(mediaReadFile).toHaveBeenCalledWith("https://cdn.test/a.png");
     expect(client.sendDmWithImage).toHaveBeenCalled();
-    fetchSpy.mockRestore();
   });
 
-  it("недоступная ссылка гасится и попадает в лог", async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue({ ok: false, status: 404 } as never);
+  it("ошибка platform loader гасится, редактируется и попадает в лог", async () => {
+    mediaReadFile.mockRejectedValueOnce(new Error("token=secret request-body=password"));
     const { deliver, finish } = draftlessDeliverer();
 
     await deliver({ text: "Готово", mediaUrl: "https://cdn.test/a.png" }, { kind: "final" });
     await finish();
 
-    expect(log.error).toHaveBeenCalledWith(expect.stringContaining("media fetch failed: 404"));
+    expect(log.error).toHaveBeenCalledWith(
+      "[openclaw-max] вложение отправить не удалось: OpenClaw could not read outbound media for MAX",
+    );
+    expect(String(log.error.mock.calls)).not.toContain("secret");
+    expect(String(log.error.mock.calls)).not.toContain("password");
+  });
+
+  it("без platform loader URL не вызывает fetch и закрывается отказом", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const { deliver, finish } = draftlessDeliverer(null);
+
+    await deliver({ text: "Готово", mediaUrl: "https://127.0.0.1/a.png" }, { kind: "final" });
+    await finish();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      "[openclaw-max] вложение отправить не удалось: MAX outbound media requires OpenClaw mediaReadFile",
+    );
     fetchSpy.mockRestore();
   });
 

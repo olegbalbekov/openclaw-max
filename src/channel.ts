@@ -167,6 +167,34 @@ const AUDIO_MIME_BY_EXT: Record<string, string> = {
   aac: "audio/aac",
 };
 
+function inferOutboundMediaType(
+  mimeType: string | undefined,
+  filename: string | undefined,
+  buffer: Buffer,
+): "image" | "video" | "audio" | "file" {
+  if (mimeType?.startsWith("image/")) return "image";
+  if (mimeType?.startsWith("video/")) return "video";
+  if (mimeType?.startsWith("audio/")) return "audio";
+
+  const ext = filename?.split(/[?#]/, 1)[0]?.split(".").pop()?.toLowerCase();
+  if (ext && IMAGE_MIME_BY_EXT[ext]) return "image";
+  if (ext && AUDIO_MIME_BY_EXT[ext]) return "audio";
+  if (ext && ["mp4", "mov", "mkv", "webm", "avi"].includes(ext)) return "video";
+
+  // OpenClaw's modern outbound bridge may provide a prepared Buffer without
+  // mimeType/filename. Sniff common image signatures so valid images do not
+  // fall through to MAX's generic-file upload flow.
+  if (
+    (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) ||
+    (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) ||
+    (buffer.length >= 6 && (buffer.subarray(0, 6).toString("ascii") === "GIF87a" || buffer.subarray(0, 6).toString("ascii") === "GIF89a")) ||
+    (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") ||
+    (buffer.length >= 2 && buffer.subarray(0, 2).toString("ascii") === "BM")
+  ) return "image";
+
+  return "file";
+}
+
 /**
  * Собрать вложения ответа: ссылки из нагрузки плюс тип файла.
  *
@@ -203,22 +231,31 @@ export function collectOutboundMedia(payload: DeliverPayload): OutboundMediaItem
  * унесло бы весь ответ, а не одно вложение.
  */
 function safeFileName(raw: string): string {
+  let decoded = raw;
   try {
-    return decodeURIComponent(raw);
+    decoded = decodeURIComponent(raw);
   } catch {
-    return raw;
+    // Keep the undecoded name when it contains an invalid percent escape.
   }
+  // A URL basename can contain encoded separators. Do not let decoding turn it
+  // back into a path or multipart filename with directory components.
+  return decoded.replace(/[\\/]/g, "_");
 }
 
-/** Прочитать вложение: локальный файл или ссылка. */
-async function readOutboundMedia(ref: string): Promise<Buffer> {
-  if (/^https?:\/\//i.test(ref)) {
-    const res = await fetch(ref);
-    if (!res.ok) throw new Error(`media fetch failed: ${res.status}`);
-    return Buffer.from(await res.arrayBuffer());
+/** Прочитать вложение только через проверенный OpenClaw media-access hook. */
+async function readOutboundMedia(
+  ref: string,
+  mediaReadFile?: (filePath: string) => Promise<Buffer>,
+): Promise<Buffer> {
+  if (!mediaReadFile) {
+    throw new Error("MAX outbound media requires OpenClaw mediaReadFile");
   }
-  const { readFile } = await import("node:fs/promises");
-  return readFile(ref.startsWith("file://") ? new URL(ref) : ref);
+  try {
+    return Buffer.from(await mediaReadFile(ref));
+  } catch {
+    // Do not reflect signed URLs, local paths, request bodies or loader details.
+    throw new Error("OpenClaw could not read outbound media for MAX");
+  }
 }
 
 export function createStreamingDeliver(
@@ -230,6 +267,7 @@ export function createStreamingDeliver(
   mode: MaxProgressDraftMode,
   seed: string,
   log?: any,
+  mediaReadFile?: (filePath: string) => Promise<Buffer>,
 ): {
   onPartialToken: (text: string) => Promise<void>;
   onWorkStart: () => Promise<void>;
@@ -304,7 +342,7 @@ export function createStreamingDeliver(
     const target = maxTarget();
     let text = caption;
     for (const item of items) {
-      const buffer = await readOutboundMedia(item.ref);
+      const buffer = await readOutboundMedia(item.ref, mediaReadFile);
       const uploadUrl = await getUploadUrl(account.token, "image");
       if (!uploadUrl) throw new Error("Failed to get MAX upload URL");
       const uploaded = await uploadFile(uploadUrl, buffer, item.mimeType || "image/jpeg", item.name);
@@ -327,7 +365,7 @@ export function createStreamingDeliver(
     const target = maxTarget();
     let text = caption;
     for (const item of items) {
-      const buffer = await readOutboundMedia(item.ref);
+      const buffer = await readOutboundMedia(item.ref, mediaReadFile);
       const upload = await createUpload(account.token, "audio");
       if (!upload) throw new Error("Failed to create MAX audio upload");
       const stored = await uploadToUrl(upload.url, buffer, item.mimeType || "audio/ogg", item.name);
@@ -624,6 +662,16 @@ export async function deliverMessage(
     CHANNEL_ID
   ] as MaxStreamingEntry;
   const streamMode = resolveChannelPreviewStreamMode(entry, "progress") as MaxProgressDraftMode;
+  const mediaReadFile = async (filePath: string): Promise<Buffer> =>
+    Buffer.from(
+      (
+        await rt.media.loadWebMedia(filePath, {
+          // Reply media was authorized by the core turn that produced it;
+          // keep the read itself inside OpenClaw's media runtime.
+          localRoots: "any",
+        })
+      ).buffer,
+    );
   const { onPartialToken, onWorkStart, onThinking, onToolStart, onItemEvent, onApprovalEvent, deliver, finish } =
     createStreamingDeliver(
       account,
@@ -634,6 +682,7 @@ export async function deliverMessage(
       streamMode,
       `${chatId}:${_messageId}`,
       log,
+      mediaReadFile,
     );
 
   try {
@@ -808,20 +857,42 @@ export function createMaxPlugin(): any {
         return { channel: CHANNEL_ID, messageId: `max-${Date.now()}`, chatId: to };
       },
 
-      sendMedia: async ({ to, buffer, mimeType, filename, caption, accountId, cfg, chatType }: any) => {
+      sendMedia: async ({
+        to,
+        buffer,
+        mediaUrl,
+        mediaReadFile,
+        mimeType,
+        filename,
+        caption,
+        text: outboundText,
+        accountId,
+        cfg,
+        chatType,
+      }: any) => {
         const account = resolveAccount(cfg ?? {}, accountId);
         if (!account.token) throw new Error(describeMissingToken(account));
 
         const numericId = parseInt(to.replace(/^max:(?:user:)?/i, ""), 10);
         if (isNaN(numericId)) throw new Error(`Invalid MAX user ID: ${to}`);
 
-        // Determine media type
-        const mediaType = mimeType?.startsWith("image/") ? "image"
-          : mimeType?.startsWith("video/") ? "video"
-          : mimeType?.startsWith("audio/") ? "audio"
-          : "file";
+        // Current OpenClaw gives outbound adapters `mediaUrl`; older bridges
+        // and focused tests may provide an already prepared `buffer`.
+        const mediaBuffer = Buffer.isBuffer(buffer)
+          ? buffer
+          : typeof mediaUrl === "string" && mediaUrl
+            ? await readOutboundMedia(mediaUrl, mediaReadFile)
+            : null;
+        if (!mediaBuffer) throw new Error("MAX media payload is missing");
 
-        const text = caption ?? "";
+        const inferredFilename = filename ?? (typeof mediaUrl === "string"
+          ? safeFileName(mediaUrl.split(/[?#]/, 1)[0]?.split("/").pop() || "file")
+          : "file");
+
+        // Determine media type
+        const mediaType = inferOutboundMediaType(mimeType, inferredFilename, mediaBuffer);
+
+        const text = caption ?? outboundText ?? "";
         let mid: string | null = null;
         if (mediaType === "image") {
           // Для картинки токен вложения отдаёт сам загрузчик.
@@ -829,9 +900,9 @@ export function createMaxPlugin(): any {
           if (!uploadUrl) throw new Error("Failed to get MAX upload URL");
           const uploaded = await uploadFile(
             uploadUrl,
-            buffer,
+            mediaBuffer,
             mimeType ?? "application/octet-stream",
-            filename ?? "file",
+            inferredFilename,
           );
           if (!uploaded) throw new Error("Failed to upload file to MAX");
           if (chatType === "direct" || !chatType) {
@@ -848,9 +919,9 @@ export function createMaxPlugin(): any {
           if (!upload) throw new Error("Failed to create MAX upload");
           const stored = await uploadToUrl(
             upload.url,
-            buffer,
+            mediaBuffer,
             mimeType ?? "application/octet-stream",
-            filename ?? "file",
+            inferredFilename,
           );
           if (!stored) throw new Error("Failed to upload file to MAX");
           mid = await sendWithAttachment(

@@ -14,7 +14,7 @@ import tls from "node:tls";
 // built-in undici copy, which rejects a dispatcher built by this (possibly
 // different) undici version with UND_ERR_INVALID_ARG. Same-package fetch+Agent
 // are guaranteed compatible.
-import { fetch, FormData, Agent, ProxyAgent, type Dispatcher } from "undici";
+import { fetch, Agent, ProxyAgent, type Dispatcher } from "undici";
 import type { MaxUpdatesResponse } from "./types.js";
 import { RUSSIAN_TRUSTED_CA } from "./max-ca.js";
 
@@ -25,6 +25,18 @@ export class MaxApiError extends Error {
   constructor(message: string, public readonly status: number) {
     super(message);
     this.name = "MaxApiError";
+  }
+}
+
+function safeResponseSummary(text: string): string {
+  if (!text) return "empty response";
+  try {
+    const value = JSON.parse(text) as { code?: unknown; message?: unknown };
+    const code = typeof value?.code === "string" ? value.code : "unknown";
+    const message = typeof value?.message === "string" ? value.message : "no message";
+    return `${code}: ${message}`.slice(0, 500);
+  } catch {
+    return "non-JSON response";
   }
 }
 
@@ -46,6 +58,28 @@ export function configureMaxTransport(opts?: { httpProxy?: string }): void {
   dispatcher = proxy
     ? new ProxyAgent({ uri: proxy, connect: { ca: MAX_CA } })
     : new Agent({ connect: { ca: MAX_CA } });
+}
+
+function encodeMultipart(buffer: Buffer, mimeType: string, filename: string): {
+  body: Buffer;
+  contentType: string;
+} {
+  const boundary = `----openclaw-max-${crypto.randomUUID()}`;
+  const safeName = filename.replace(/[\r\n"]/g, "_");
+  // MIME is emitted into a multipart header. Accept only a strict RFC token
+  // type/subtype pair; malformed or injected values become inert binary data.
+  const mimeToken = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+  const safeMimeType = mimeToken.test(mimeType) ? mimeType : "application/octet-stream";
+  const head = Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="data"; filename="${safeName}"\r\n` +
+    `Content-Type: ${safeMimeType}\r\n\r\n`,
+  );
+  const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+  return {
+    body: Buffer.concat([head, buffer, tail]),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
 }
 
 // ─── Low-level fetch helper ───────────────────────────────────────────────────
@@ -72,33 +106,27 @@ async function maxRequest<T>(
     headers["Content-Type"] = "application/json";
   }
 
-  const controller = new AbortController();
-  const abortFromCaller = (): void => controller.abort(signal?.reason);
-  if (signal?.aborted) abortFromCaller();
-  else signal?.addEventListener("abort", abortFromCaller, { once: true });
-  const timer = setTimeout(
-    () => controller.abort(new DOMException("MAX API request timed out", "TimeoutError")),
-    REQUEST_TIMEOUT_MS,
-  );
+  const requestSignal = AbortSignal.any([
+    AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    ...(signal ? [signal] : []),
+  ]);
 
-  try {
-    const res = await fetch(url.toString(), {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
-      dispatcher,
-    });
+  const res = await fetch(url.toString(), {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: requestSignal,
+    dispatcher,
+  });
 
-    const text = await res.text();
-    if (!res.ok) {
-      throw new MaxApiError(`MAX API ${method} ${path} → ${res.status}: ${text}`, res.status);
-    }
-    return JSON.parse(text) as T;
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", abortFromCaller);
+  const text = await res.text();
+  if (!res.ok) {
+    throw new MaxApiError(
+      `MAX API ${method} ${path} → ${res.status}: ${safeResponseSummary(text)}`,
+      res.status,
+    );
   }
+  return JSON.parse(text) as T;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -294,7 +322,8 @@ export async function getUploadUrl(token: string, type: "image" | "video" | "aud
   try {
     const res = await maxRequest<{ url: string }>(token, "POST", "/uploads", { type });
     return res?.url ?? null;
-  } catch {
+  } catch (err) {
+    console.warn(`[openclaw-max] getUploadUrl error: ${err instanceof Error ? err.message : err}`);
     return null;
   }
 }
@@ -305,11 +334,14 @@ export async function getUploadUrl(token: string, type: "image" | "video" | "aud
  */
 export async function uploadFile(uploadUrl: string, buffer: Buffer, mimeType: string, filename: string): Promise<{ token: string } | null> {
   try {
-    const form = new FormData();
-    form.append("data", new Blob([new Uint8Array(buffer)], { type: mimeType }), filename);
+    const { body, contentType } = encodeMultipart(buffer, mimeType, filename);
     const res = await fetch(uploadUrl, {
       method: "POST",
-      body: form,
+      headers: {
+        "Content-Type": contentType,
+        "Content-Length": String(body.length),
+      },
+      body,
       dispatcher,
     });
     if (!res.ok) return null;
@@ -393,8 +425,11 @@ export async function createUpload(
 ): Promise<MaxUploadTarget | null> {
   try {
     const res = await maxRequest<Partial<MaxUploadTarget>>(token, "POST", "/uploads", { type });
-    return res?.url && res?.token ? { url: res.url, token: res.token } : null;
-  } catch {
+    return typeof res?.url === "string"
+      ? { url: res.url, token: typeof res.token === "string" ? res.token : "" }
+      : null;
+  } catch (err) {
+    console.warn(`[openclaw-max] createUpload error: ${err instanceof Error ? err.message : err}`);
     return null;
   }
 }
@@ -411,9 +446,16 @@ export async function uploadToUrl(
   filename: string,
 ): Promise<{ token: string | null } | null> {
   try {
-    const form = new FormData();
-    form.append("data", new Blob([new Uint8Array(buffer)], { type: mimeType }), filename);
-    const res = await fetch(uploadUrl, { method: "POST", body: form, dispatcher });
+    const { body, contentType } = encodeMultipart(buffer, mimeType, filename);
+    const res = await fetch(uploadUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": contentType,
+        "Content-Length": String(body.length),
+      },
+      body,
+      dispatcher,
+    });
     if (!res.ok) return null;
     const text = await res.text();
     try {

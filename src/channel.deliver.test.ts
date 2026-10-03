@@ -31,10 +31,7 @@ const client = {
 
 vi.mock("./client.js", () => client);
 
-// Вложение читается с диска динамическим импортом — подменяем модуль целиком:
-// `vi.spyOn` на пространстве имён ESM не работает.
-const readFile = vi.fn();
-vi.mock("node:fs/promises", () => ({ readFile: (...args: unknown[]) => readFile(...args) }));
+const mediaReadFile = vi.fn();
 
 const draft = {
   compositor: {
@@ -101,6 +98,7 @@ function makeDeliverer(chatType = "direct") {
     "progress" as never,
     "seed",
     log,
+    mediaReadFile,
   );
   made.push(deliverer);
   return deliverer;
@@ -115,7 +113,7 @@ beforeEach(() => {
   draft.overwrite.mockResolvedValue(true);
   client.editMessage.mockResolvedValue(true);
   client.sendDm.mockResolvedValue("mid-answer");
-  readFile.mockResolvedValue(Buffer.from("bytes"));
+  mediaReadFile.mockResolvedValue(Buffer.from("bytes"));
 });
 
 afterEach(async () => {

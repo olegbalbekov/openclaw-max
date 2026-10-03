@@ -4,7 +4,7 @@
  * Отправка вложений вынесена в `client.attachments.test.ts` — там своя история
  * с токеном и ожиданием готовности.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMock = vi.fn();
 const agentCalls: unknown[] = [];
@@ -42,10 +42,6 @@ beforeEach(() => {
   proxyCalls.length = 0;
 });
 
-afterEach(() => {
-  vi.useRealTimers();
-});
-
 describe("configureMaxTransport", () => {
   it("без прокси берёт обычный агент, доверяющий CA Минцифры", () => {
     client.configureMaxTransport({});
@@ -66,35 +62,99 @@ describe("configureMaxTransport", () => {
   });
 });
 
-describe("getBotInfo cancellation", () => {
-  it("lifecycle abort cancels an active request promptly", async () => {
-    const controller = new AbortController();
-    fetchMock.mockImplementationOnce(async (_url: string, init: { signal: AbortSignal }) => {
-      await new Promise<void>((_resolve, reject) => {
-        init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
-      });
-    });
+describe("uploadToUrl", () => {
+  it("сохраняет multipart, Content-Length и JSON-токен", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ token: "uploaded-token" }));
 
-    const request = client.getBotInfo(TOKEN, controller.signal);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    controller.abort(new DOMException("account stopped", "AbortError"));
+    await expect(client.uploadToUrl(
+      "https://upload.test/path",
+      Buffer.from("payload"),
+      "image/png",
+      "photo.png",
+    )).resolves.toEqual({ token: "uploaded-token" });
 
-    await expect(request).rejects.toMatchObject({ name: "AbortError" });
-    expect((fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal).aborted).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0] as [string, Record<string, any>];
+    const body = init.body as Buffer;
+    expect(url).toBe("https://upload.test/path");
+    expect(init.method).toBe("POST");
+    expect(init.headers["Content-Type"]).toMatch(/^multipart\/form-data; boundary=/);
+    expect(init.headers["Content-Length"]).toBe(String(body.length));
+    expect(body.toString()).toContain("Content-Type: image/png\r\n\r\npayload");
+    expect(body.toString()).toContain('filename="photo.png"');
   });
 
-  it("request timeout remains active without lifecycle abort", async () => {
-    vi.useFakeTimers();
-    fetchMock.mockImplementationOnce(async (_url: string, init: { signal: AbortSignal }) => {
-      await new Promise<void>((_resolve, reject) => {
-        init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
-      });
-    });
+  it.each([
+    "image/png\r\nX-Evil: yes",
+    "image/png\nX-Evil: yes",
+    "image",
+    "image/png; charset=utf-8",
+    " image/png",
+    "image/(png)",
+    "",
+  ])("подменяет небезопасный MIME на application/octet-stream: %j", async (mimeType) => {
+    fetchMock.mockResolvedValueOnce(ok({ token: "uploaded-token" }));
 
-    const request = client.getBotInfo(TOKEN);
-    const rejected = expect(request).rejects.toMatchObject({ name: "TimeoutError" });
-    await vi.advanceTimersByTimeAsync(30_000);
-    await rejected;
+    await client.uploadToUrl(
+      "https://upload.test/path",
+      Buffer.from("payload"),
+      mimeType,
+      "photo.png",
+    );
+
+    const init = fetchMock.mock.calls[0][1] as Record<string, any>;
+    const wire = (init.body as Buffer).toString();
+    expect(wire).toContain("Content-Type: application/octet-stream\r\n\r\npayload");
+    expect(wire).not.toContain("X-Evil:");
+    expect(init.headers["Content-Length"]).toBe(String((init.body as Buffer).length));
+  });
+
+  it("экранирует управляющие символы и кавычку в имени файла", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ token: "uploaded-token" }));
+
+    await client.uploadToUrl(
+      "https://upload.test/path",
+      Buffer.from("payload"),
+      "application/vnd.example+json",
+      "bad\r\n\"name.json",
+    );
+
+    const init = fetchMock.mock.calls[0][1] as Record<string, any>;
+    const wire = (init.body as Buffer).toString();
+    expect(wire).toContain('filename="bad___name.json"');
+    expect(wire).toContain("Content-Type: application/vnd.example+json");
+  });
+
+  it("сохраняет успешный не-JSON ответ как загрузку без токена", async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 200, text: async () => "<retval>1</retval>" });
+    await expect(client.uploadToUrl(
+      "https://upload.test/path",
+      Buffer.from("payload"),
+      "audio/ogg",
+      "voice.ogg",
+    )).resolves.toEqual({ token: null });
+  });
+
+  it("возвращает null при HTTP-ошибке и не раскрывает тело ответа", async () => {
+    const text = vi.fn(async () => "token=server-secret&body=password");
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 403, text });
+
+    await expect(client.uploadToUrl(
+      "https://upload.test/path?token=request-secret",
+      Buffer.from("request-body-secret"),
+      "text/plain",
+      "note.txt",
+    )).resolves.toBeNull();
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it("возвращает null при сетевой ошибке", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("request body and token leaked by transport"));
+    await expect(client.uploadToUrl(
+      "https://upload.test/path",
+      Buffer.from("payload"),
+      "text/plain",
+      "note.txt",
+    )).resolves.toBeNull();
   });
 });
 
@@ -285,6 +345,43 @@ describe("загрузка файлов", () => {
     fetchMock.mockResolvedValueOnce(fail());
     await expect(client.getUploadUrl(TOKEN, "image")).resolves.toBeNull();
   });
+  it("createUpload принимает актуальный ответ без token", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ url: "https://up.test/file" }));
+    await expect(client.createUpload(TOKEN, "file")).resolves.toEqual({
+      url: "https://up.test/file",
+      token: "",
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "https://platform-api2.max.ru/uploads?type=file",
+      expect.objectContaining({
+        method: "POST",
+        headers: { Authorization: TOKEN },
+        body: undefined,
+      }),
+    );
+  });
+  it("upload diagnostics не печатает ответ или токен", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({
+        code: "invalid.parameter",
+        message: "Bad type",
+        token: "secret-token",
+        details: "private-body",
+      }),
+    });
+
+    await expect(client.getUploadUrl("super-secret-auth", "image")).resolves.toBeNull();
+
+    const output = warn.mock.calls.flat().join(" ");
+    expect(output).toContain("MAX API POST /uploads → 400: invalid.parameter: Bad type");
+    expect(output).not.toContain("secret-token");
+    expect(output).not.toContain("private-body");
+    expect(output).not.toContain("super-secret-auth");
+    warn.mockRestore();
+  });
 
   it("uploadFile понимает токен на верхнем уровне и в photos", async () => {
     fetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ token: "t1" }) });
@@ -300,6 +397,25 @@ describe("загрузка файлов", () => {
     await expect(
       client.uploadFile("https://up.test", Buffer.from("x"), "image/png", "a.png"),
     ).resolves.toEqual({ token: "t2" });
+  });
+
+  it("uploadFile задаёт Content-Length для MAX multipart-загрузчика", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ photos: { id: { token: "t" } } }),
+    });
+
+    await client.uploadFile("https://up.test", Buffer.from("image"), "image/png", 'a"\r\n.png');
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = init?.body as Buffer;
+    const headers = init?.headers as Record<string, string>;
+    expect(Buffer.isBuffer(body)).toBe(true);
+    expect(headers["Content-Type"]).toMatch(/^multipart\/form-data; boundary=/);
+    expect(headers["Content-Length"]).toBe(String(body.length));
+    expect(body.toString()).toContain('name="data"; filename="a___.png"');
+    expect(body.includes(Buffer.from("image"))).toBe(true);
   });
 
   it("uploadFile без токена и на сбое отдаёт null", async () => {

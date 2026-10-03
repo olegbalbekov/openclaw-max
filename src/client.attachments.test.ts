@@ -45,12 +45,13 @@ describe("createUpload", () => {
     });
   });
 
-  it("без токена считает создание неудачным", async () => {
-    // Для картинки MAX отдаёт только url — этим путём аудио отправить нельзя,
-    // и лучше честный null, чем вложение с пустым токеном.
+  it("без токена сохраняет URL: актуальный загрузчик отдаёт token после multipart", async () => {
     fetchMock.mockResolvedValueOnce(apiResponse(200, { url: "https://upload.example/put" }));
 
-    await expect(createUpload(TOKEN, "image")).resolves.toBeNull();
+    await expect(createUpload(TOKEN, "image")).resolves.toEqual({
+      url: "https://upload.example/put",
+      token: "",
+    });
   });
 
   it("на ошибке API возвращает null, а не бросает", async () => {

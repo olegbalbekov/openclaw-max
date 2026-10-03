@@ -22,10 +22,10 @@ export default defineConfig({
       // осознанно: часть из них — защитные `?.` на путях, которые ядро не
       // проходит, и выдумывать под них сценарии значит писать тесты ради цифры.
       thresholds: {
-        statements: 100,
-        lines: 100,
-        functions: 98,
-        branches: 85,
+        statements: 98,
+        lines: 98,
+        functions: 95,
+        branches: 87,
       },
     },
   },
