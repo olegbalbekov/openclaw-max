@@ -5,6 +5,20 @@ All notable changes to `@olegbalbekov/openclaw-max` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-10-03
+
+### Added
+- **Outbound media uploads against current OpenClaw cores.** Restores sending
+  images/files through the current upload flow. (#8)
+
+### Fixed
+- **Media and voice in agent replies after 0.7.0.** The inbound reply path now
+  passes `mediaReadFile` into `createStreamingDeliver` (backed by
+  `runtime.media.loadWebMedia`), so images and voice in replies to incoming
+  messages keep working instead of failing with `MAX outbound media requires
+  OpenClaw mediaReadFile`. Adds regression tests for PNG and OGG/voice replies.
+  (#8, review by @Shagrat2, fix by @Pe4atnik)
+
 ## [0.7.0] - 2026-09-29
 
 ### Added
@@ -25,15 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   idempotent where possible. Update-handler failures are now isolated from
   transport retry/backoff. (#7)
 
-### Notes
-- PR #8 (current OpenClaw outbound media uploads) is **not** part of this release —
-  it needs a rebase onto `main` and a fix for `mediaReadFile` propagation in the
-  reply path; it will ship in a later patch.
-
 ## [0.6.0] - 2026-09-21
 
 - Runs on OpenClaw 2026.8+ cores: no longer calls the removed legacy APIs.
 - README refresh.
 
+[0.7.1]: https://github.com/olegbalbekov/openclaw-max/releases/tag/v0.7.1
 [0.7.0]: https://github.com/olegbalbekov/openclaw-max/releases/tag/v0.7.0
 [0.6.0]: https://github.com/olegbalbekov/openclaw-max/releases/tag/v0.6.0
