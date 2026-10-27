@@ -34,10 +34,10 @@
     "openclaw": "*"
   },
   "devDependencies": {
-    "openclaw": ">=2026.3.24",
-    "typescript": "^5.9.3",
     "@types/node": "^22.20.1",
     "@vitest/coverage-v8": "^3.2.7",
+    "openclaw": ">=2026.3.24",
+    "typescript": "^5.9.3",
     "vitest": "^3.2.7"
   },
   "keywords": [
@@ -80,6 +80,6 @@
   },
   "dependencies": {
     "undici": "^7.24.4",
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   }
 }
