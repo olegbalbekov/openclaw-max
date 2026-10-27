@@ -5,6 +5,24 @@ All notable changes to `@olegbalbekov/openclaw-max` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-10-27
+
+### Added
+- **Inbound non-image attachments.** Incoming `file`, `audio`, `video`, and
+  `document` attachments are now downloaded to `~/.openclaw/media/inbound` and the
+  saved absolute path is appended to the delivered text as `[file: <path>]`
+  (images keep their existing `[image: <path>]` path). Works in both webhook and
+  long-polling modes via the shared `handleUpdate`. A video or file with no direct
+  URL is resolved through `GET /videos/{token}` / `GET /files/{token}`. If a
+  download or save fails the rest of the message still arrives, with a
+  `[file: не удалось скачать]` marker. (#10, by @dinjak)
+
+### Changed
+- **`webhook-handler.ts` is typechecked again** — the `@ts-nocheck` marker was
+  removed and the inbound handler is now fully typed. (#10)
+- Added unit coverage for the inbound download helpers (`downloadFileMeta`,
+  `getFileByToken`, `getVideoDownloadUrl`) to keep the 98% coverage gate.
+
 ## [0.7.1] - 2026-10-03
 
 ### Added
@@ -44,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Runs on OpenClaw 2026.8+ cores: no longer calls the removed legacy APIs.
 - README refresh.
 
+[0.8.0]: https://github.com/olegbalbekov/openclaw-max/releases/tag/v0.8.0
 [0.7.1]: https://github.com/olegbalbekov/openclaw-max/releases/tag/v0.7.1
 [0.7.0]: https://github.com/olegbalbekov/openclaw-max/releases/tag/v0.7.0
 [0.6.0]: https://github.com/olegbalbekov/openclaw-max/releases/tag/v0.6.0

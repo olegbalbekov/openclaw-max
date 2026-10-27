@@ -15,8 +15,10 @@ MAX messenger (max.ru) channel plugin for [OpenClaw](https://github.com/openclaw
   the answer without dropping the text — the turn is drafted the same way as the
   Telegram channel
 - Forwarded messages: incoming forwards are unwrapped and passed to the agent
-- Media sending and receiving (images), including screenshots and images from
-  forwarded messages, saved to `~/.openclaw/media/inbound`
+- Media sending and receiving: images (including screenshots and images from
+  forwarded messages) plus inbound files, audio, video, and documents are
+  downloaded to `~/.openclaw/media/inbound` and the saved path is handed to the
+  agent as `[file: <path>]` (`[image: <path>]` for pictures)
 - Bot token as a plain string or a [SecretRef](#token-as-a-secretref) (env, file,
   or external secret manager) — the credential can stay out of the config file
 - Allowlist-based access control
