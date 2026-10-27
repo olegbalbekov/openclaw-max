@@ -298,17 +298,144 @@ export async function getBotInfo(token: string, signal?: AbortSignal): Promise<{
   return maxRequest(token, "GET", "/me", undefined, undefined, signal);
 }
 
+export interface DownloadedBytes {
+  buf: Buffer;
+  contentType?: string;
+  filename?: string;
+}
+
+function filenameFromDisposition(header: string | null): string | undefined {
+  if (!header) return undefined;
+  const star = header.match(/filename\*=(?:UTF-8''|)([^;]+)/i);
+  if (star?.[1]) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^"(.*)"$/, "$1"));
+    } catch {
+      // fall through to filename=
+    }
+  }
+  const plain = header.match(/filename="?([^";]+)"?/i);
+  return plain?.[1]?.trim() || undefined;
+}
+
 /**
- * Скачать файл по URL.
+ * Скачать файл по URL вместе с Content-Type и именем из Content-Disposition.
  */
-export async function downloadFile(token: string, url: string): Promise<Buffer | null> {
+export async function downloadFileMeta(token: string, url: string): Promise<DownloadedBytes | null> {
   try {
     const res = await fetch(url, {
       headers: { Authorization: token },
       dispatcher,
     });
     if (!res.ok) return null;
-    return Buffer.from(await res.arrayBuffer());
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length) return null;
+    const headers = res.headers;
+    const header = (name: string) =>
+      headers && typeof headers.get === "function" ? headers.get(name) : null;
+    return {
+      buf,
+      contentType: header("content-type") ?? undefined,
+      filename: filenameFromDisposition(header("content-disposition")),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Скачать файл по URL.
+ */
+export async function downloadFile(token: string, url: string): Promise<Buffer | null> {
+  const got = await downloadFileMeta(token, url);
+  return got?.buf ?? null;
+}
+
+/**
+ * Получить файл по токену вложения: GET /files/{fileToken}.
+ * Официальная schema 0.0.33 этот метод не перечисляет (в отличие от GET /videos/{token}),
+ * но TamTam/MAX Bot API исторически отдаёт JSON `{ url, filename }` либо сами байты.
+ * Нужен, когда у forwarded file нет payload.url — только payload.token.
+ */
+export async function getFileByToken(
+  token: string,
+  fileToken: string,
+): Promise<{ url?: string; filename?: string; buf?: Buffer; contentType?: string } | null> {
+  const url = `${MAX_API}/files/${encodeURIComponent(fileToken)}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: token },
+      signal: controller.signal,
+      dispatcher,
+    });
+    if (!res.ok) return null;
+    const contentType = res.headers.get("content-type") || "";
+    const filename = filenameFromDisposition(res.headers.get("content-disposition"));
+    const buf = Buffer.from(await res.arrayBuffer());
+    const looksJson =
+      contentType.includes("json") ||
+      (buf.length > 0 && buf[0] === 0x7b);
+    if (looksJson) {
+      try {
+        const json = JSON.parse(buf.toString("utf8")) as Record<string, unknown>;
+        const fileUrl =
+          (typeof json.url === "string" && json.url) ||
+          (typeof json.download_url === "string" && json.download_url) ||
+          undefined;
+        const name =
+          (typeof json.filename === "string" && json.filename) ||
+          (typeof json.name === "string" && json.name) ||
+          filename;
+        if (fileUrl || json.token || json.filename) {
+          return { url: fileUrl, filename: name, contentType };
+        }
+      } catch {
+        // not API metadata — treat body as the file
+      }
+      return { buf, contentType, filename };
+    }
+    return { buf, contentType, filename };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const PREFERRED_VIDEO_KEYS = [
+  "mp4_1080",
+  "mp4_720",
+  "mp4_480",
+  "mp4_360",
+  "mp4_240",
+  "mp4_144",
+];
+
+/**
+ * Прямая ссылка на видео: GET /videos/{videoToken} (официальный MAX Bot API).
+ */
+export async function getVideoDownloadUrl(token: string, videoToken: string): Promise<string | null> {
+  try {
+    const info = await maxRequest<{ urls?: Record<string, unknown> }>(
+      token,
+      "GET",
+      `/videos/${encodeURIComponent(videoToken)}`,
+    );
+    const urls = info?.urls;
+    if (!urls || typeof urls !== "object") return null;
+    for (const key of PREFERRED_VIDEO_KEYS) {
+      const value = urls[key];
+      if (typeof value === "string" && /^https?:\/\//i.test(value)) return value;
+    }
+    for (const value of Object.values(urls)) {
+      if (typeof value === "string" && /^https?:\/\//i.test(value) && !value.includes(".m3u8")) {
+        return value;
+      }
+    }
+    return null;
   } catch {
     return null;
   }
