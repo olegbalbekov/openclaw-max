@@ -21,7 +21,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 24.16.0
+          node-version: 24.22.1
           cache: npm
 
       - name: Install dependencies
@@ -45,12 +45,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      # Ядро с 2026.9.3 требует Node 24.16+; на более старом npm молча пропускает
-      # установку, и проверка типов не находит SDK вовсе.
+      # Ядро требует Node >=24.22.1 <25 || >=26.12.1 (floor подняли в октябре 2026);
+      # на более старом установка openclaw@latest/beta падает в preinstall-гварде.
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 24.16.0
+          node-version: 24.22.1
           cache: npm
 
       - name: Install plugin dependencies
